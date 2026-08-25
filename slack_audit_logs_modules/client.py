@@ -26,9 +26,8 @@ REQUEST_TIMEOUT = 30
 class AuditLogsClient(requests.Session):
     """Reads pages of audit events from the Slack Audit Logs API.
 
-    Rate limiting and retries — including honouring Retry-After — are delegated to the mounted
-    LimiterAdapter and urllib3 Retry, following the pattern of the Tehtris and SkyhighSecurity
-    modules in SEKOIA-IO/automation-library.
+    Rate limiting, retries and Retry-After are delegated to the mounted LimiterAdapter and urllib3
+    Retry, following the pattern of the Tehtris and SkyhighSecurity modules.
     """
 
     MAX_PAGES = 100

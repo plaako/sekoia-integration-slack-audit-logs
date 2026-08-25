@@ -75,7 +75,7 @@ def watermarked(module: SlackAuditLogsModule, data_path: Path, at: int, **config
     )
 
     connector = SlackAuditLogsConnector(module=module, data_path=data_path)
-    connector.configuration = {**CONFIGURATION, **configuration}
+    connector.configuration = SlackAuditLogsConnectorConfiguration(**{**CONFIGURATION, **configuration})
     return connector
 
 
@@ -282,9 +282,7 @@ def test_a_resumed_window_uses_the_stored_end_not_a_freshly_computed_one(module,
     assert calls[0][1] != start + connector.SUB_WINDOW_SECONDS  # what recomputing would have given
 
 
-def test_the_checkpoint_commits_the_frozen_end_and_the_next_window_starts_after_it(
-    module, tmp_path, monkeypatch
-):
+def test_the_checkpoint_commits_the_frozen_end_and_the_next_window_starts_after_it(module, tmp_path, monkeypatch):
     start = seconds_ago(3 * 3600)
     frozen_end = start + 100
     connector = watermarked(module, tmp_path, start)
@@ -399,9 +397,7 @@ def test_the_ledger_survives_a_window_whose_far_end_has_moved(module, tmp_path, 
     assert forwarded_ids(resumed) == ["b"]
 
 
-def test_a_rejected_stored_cursor_re_reads_the_window_from_its_start_without_re_pushing(
-    module, tmp_path, monkeypatch
-):
+def test_a_rejected_stored_cursor_re_reads_the_window_from_its_start_without_re_pushing(module, tmp_path, monkeypatch):
     start = seconds_ago(2 * 3600)
     connector = watermarked(module, tmp_path, start)
     monkeypatch.setattr(connector, "log", lambda message, level="info", **kwargs: None)
@@ -703,9 +699,7 @@ def test_an_untrimmed_ledger_is_not_flagged_as_truncated(module, tmp_path, monke
     assert stored["truncated"] is False
 
 
-def test_a_stale_cursor_re_read_on_a_trimmed_ledger_warns_that_duplicates_are_possible(
-    module, tmp_path, monkeypatch
-):
+def test_a_stale_cursor_re_read_on_a_trimmed_ledger_warns_that_duplicates_are_possible(module, tmp_path, monkeypatch):
     start = seconds_ago(2 * 3600)
     connector = watermarked(module, tmp_path, start)
     logged: list[tuple] = []
@@ -907,9 +901,7 @@ def test_forwarding_entries_without_an_id_is_reported_with_a_count(module, tmp_p
     assert any("twice" in message for message in warnings)
 
 
-def test_a_resume_suppresses_the_identified_entries_and_re_delivers_the_id_less_one(
-    module, tmp_path, monkeypatch
-):
+def test_a_resume_suppresses_the_identified_entries_and_re_delivers_the_id_less_one(module, tmp_path, monkeypatch):
     """The trade, stated as a test: the entry with an id is held back on a re-read, the one without is
     delivered again. A bounded duplicate, announced in the logs, instead of a silent drop."""
     start = seconds_ago(1800)
