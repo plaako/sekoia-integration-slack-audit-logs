@@ -23,14 +23,43 @@ Batch = tuple[list[str], datetime | None]
 
 class SlackAuditLogsConnectorConfiguration(DefaultConnectorConfiguration):
     # Bounded: `timebuffer` at 0 would commit `latest = now` and bury anything Slack indexes after.
-    frequency: int = Field(default=60, ge=10, le=3600, description="Minimum seconds between two collection cycles")
-    limit: int = Field(default=1000, ge=1, le=9999, description="Events per page, Slack's `limit` (max 9999)")
-    ratelimit_per_minute: int = Field(
-        default=30, ge=1, le=50, description="API calls per minute (Slack Tier 3 allows 50, org-wide)"
+    frequency: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="Seconds to wait between two collections of new events",
     )
-    timebuffer: int = Field(default=60, ge=1, le=3600, description="Seconds of grace for Slack's indexing lag")
+    limit: int = Field(
+        default=1000,
+        ge=1,
+        le=9999,
+        description="Maximum number of events fetched per request to Slack (Slack caps this at 9999)",
+    )
+    ratelimit_per_minute: int = Field(
+        default=30,
+        ge=1,
+        le=50,
+        description=(
+            "Maximum requests sent to Slack per minute. Slack allows 50 for the whole organization, "
+            "shared with your other Slack apps"
+        ),
+    )
+    timebuffer: int = Field(
+        default=60,
+        ge=1,
+        le=3600,
+        description=(
+            "Seconds to wait before collecting a new event, so that events Slack publishes with a "
+            "delay are not missed"
+        ),
+    )
     lookback_seconds: int = Field(
-        default=3600, ge=60, description="Depth of the first collection, used only when no state exists"
+        default=3600,
+        ge=60,
+        description=(
+            "How far back in time the very first collection goes, in seconds. Ignored once the "
+            "connector has collected at least once"
+        ),
     )
 
 
