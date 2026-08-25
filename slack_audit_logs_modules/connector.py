@@ -23,11 +23,15 @@ Batch = tuple[list[str], datetime | None]
 
 class SlackAuditLogsConnectorConfiguration(DefaultConnectorConfiguration):
     # Bounded: `timebuffer` at 0 would commit `latest = now` and bury anything Slack indexes after.
-    frequency: int = Field(default=60, ge=10, le=3600)
-    limit: int = Field(default=1000, ge=1, le=9999)
-    ratelimit_per_minute: int = Field(default=30, ge=1, le=50)
-    timebuffer: int = Field(default=60, ge=1, le=3600)
-    lookback_seconds: int = Field(default=3600, ge=60)
+    frequency: int = Field(default=60, ge=10, le=3600, description="Minimum seconds between two collection cycles")
+    limit: int = Field(default=1000, ge=1, le=9999, description="Events per page, Slack's `limit` (max 9999)")
+    ratelimit_per_minute: int = Field(
+        default=30, ge=1, le=50, description="API calls per minute (Slack Tier 3 allows 50, org-wide)"
+    )
+    timebuffer: int = Field(default=60, ge=1, le=3600, description="Seconds of grace for Slack's indexing lag")
+    lookback_seconds: int = Field(
+        default=3600, ge=60, description="Depth of the first collection, used only when no state exists"
+    )
 
 
 @dataclass

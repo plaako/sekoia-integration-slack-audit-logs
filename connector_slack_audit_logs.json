@@ -23,6 +23,7 @@
       },
       "frequency": {
         "default": 60,
+        "description": "Minimum seconds between two collection cycles",
         "maximum": 3600,
         "minimum": 10,
         "title": "Frequency",
@@ -30,6 +31,7 @@
       },
       "limit": {
         "default": 1000,
+        "description": "Events per page, Slack's `limit` (max 9999)",
         "maximum": 9999,
         "minimum": 1,
         "title": "Limit",
@@ -37,6 +39,7 @@
       },
       "ratelimit_per_minute": {
         "default": 30,
+        "description": "API calls per minute (Slack Tier 3 allows 50, org-wide)",
         "maximum": 50,
         "minimum": 1,
         "title": "Ratelimit Per Minute",
@@ -44,6 +47,7 @@
       },
       "timebuffer": {
         "default": 60,
+        "description": "Seconds of grace for Slack's indexing lag",
         "maximum": 3600,
         "minimum": 1,
         "title": "Timebuffer",
@@ -51,6 +55,7 @@
       },
       "lookback_seconds": {
         "default": 3600,
+        "description": "Depth of the first collection, used only when no state exists",
         "minimum": 60,
         "title": "Lookback Seconds",
         "type": "integer"
