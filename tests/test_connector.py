@@ -341,6 +341,73 @@ def test_an_unfinished_window_stops_the_cycle_instead_of_moving_past_it(module, 
     assert stored_progress(tmp_path)["cursor"] == "still-more"
 
 
+def test_an_excluded_action_is_not_forwarded(module, tmp_path, monkeypatch):
+    start = seconds_ago(2 * 3600)
+    page = [entry("a", start + 5), entry("b", start + 6)]
+    page[0]["action"] = "file_downloaded"
+    page[1]["action"] = "user_login"
+
+    connector = watermarked(module, tmp_path, start, excluded_actions=["file_downloaded"])
+
+    monkeypatch.setattr(
+        type(connector.client),
+        "iter_pages",
+        lambda self, oldest, latest, limit, cursor="": iter(
+            [([e for e in page if oldest <= e["date_create"] <= latest], "")]
+        ),
+    )
+
+    pushed: list[str] = []
+    for events, _ in connector.iterate():
+        pushed += [orjson.loads(event)["id"] for event in events]
+
+    assert pushed == ["b"]
+
+
+def test_a_page_of_only_excluded_actions_still_drains_its_window(module, tmp_path, monkeypatch):
+    """The window must still commit, or the watermark would stall on a filtered-out action."""
+    start = seconds_ago(2 * 3600)
+    page = [entry("a", start + 5)]
+    page[0]["action"] = "file_downloaded"
+
+    connector = watermarked(module, tmp_path, start, excluded_actions=["file_downloaded"])
+
+    monkeypatch.setattr(
+        type(connector.client),
+        "iter_pages",
+        lambda self, oldest, latest, limit, cursor="": iter(
+            [([e for e in page if oldest <= e["date_create"] <= latest], "")]
+        ),
+    )
+
+    assert list(connector.iterate()) == []
+    assert connector.checkpoint.offset > start
+
+
+def test_an_entry_repeated_inside_one_page_is_forwarded_once(module, tmp_path, monkeypatch):
+    """The ledger is consulted once per page, so a repeat inside one page would slip past it.
+
+    Slack has never been observed doing this - the duplicates in our sample corpus turned out to be
+    a capture artifact. This guards the case rather than a measured behaviour.
+    """
+    start = seconds_ago(2 * 3600)
+    repeated = entry("a", start + 5)
+    page = [repeated, entry("b", start + 6), dict(repeated)]
+
+    connector = watermarked(module, tmp_path, start)
+
+    def one_page(self, oldest, latest, limit, cursor=""):
+        yield [event for event in page if oldest <= event["date_create"] <= latest], ""
+
+    monkeypatch.setattr(type(connector.client), "iter_pages", one_page)
+
+    pushed: list[str] = []
+    for events, _ in connector.iterate():
+        pushed += [orjson.loads(event)["id"] for event in events]
+
+    assert pushed == ["a", "b"]
+
+
 def test_events_already_pushed_in_an_interrupted_window_are_not_pushed_again(module, tmp_path, monkeypatch):
     start = seconds_ago(2 * 3600)
     first_page = [entry("a", start + 5), entry("b", start + 6)]

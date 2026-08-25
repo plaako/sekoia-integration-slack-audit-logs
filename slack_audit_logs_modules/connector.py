@@ -61,6 +61,14 @@ class SlackAuditLogsConnectorConfiguration(DefaultConnectorConfiguration):
             "connector has collected at least once"
         ),
     )
+    excluded_actions: list[str] = Field(
+        default=[],
+        description=(
+            "Slack actions to drop instead of forwarding, for example file_downloaded. Leave empty "
+            "to collect everything. An action added here stops being collected from now on and "
+            "cannot be recovered later without re-collecting the whole period"
+        ),
+    )
 
 
 @dataclass
@@ -316,16 +324,24 @@ class SlackAuditLogsConnector(Connector):
 
     def _read(self, oldest: int, latest: int, cursor: str, progress: WindowProgress) -> Generator[Batch, None, None]:
         """Walk the window's pages from `cursor`, forwarding each one."""
+        excluded = set(self.configuration.excluded_actions)
+
         for entries, next_cursor in self.client.iter_pages(
             oldest=oldest, latest=latest, limit=self.configuration.limit, cursor=cursor
         ):
-            already_pushed = set(progress.pushed_ids)
-            fresh = [
-                event
-                for event in entries
+            # Grown as entries are accepted, not snapshotted: a snapshot lets two entries sharing
+            # an id inside one page both through. Never observed from Slack - defensive only.
+            seen = set(progress.pushed_ids)
+            fresh = []
+            for event in entries:
+                identifier = self._identifier(event)
                 # An entry with no id is never held back - see _identifier.
-                if (identifier := self._identifier(event)) is None or identifier not in already_pushed
-            ]
+                if identifier is not None:
+                    if identifier in seen:
+                        continue
+                    seen.add(identifier)
+                if event.get("action") not in excluded:
+                    fresh.append(event)
 
             if fresh:
                 serialised = [orjson.dumps(event).decode("utf-8") for event in fresh]

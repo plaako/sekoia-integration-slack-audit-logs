@@ -31,6 +31,7 @@ plan restriction from an API outage.
 | `ratelimit_per_minute` | 30 | 1–50 | Slack's quota is **organization-wide**, shared with every other Slack app |
 | `timebuffer` | 60 | 1–3600 | Events younger than this are left for the next cycle, covering Slack's indexing lag |
 | `lookback_seconds` | 3600 | ≥ 60 | Depth of the first run. Only applies when no state exists |
+| `excluded_actions` | — | — | Slack actions to drop instead of forwarding. An action added here is not collected from then on and cannot be recovered without re-collecting the period |
 
 ## How collection works
 
