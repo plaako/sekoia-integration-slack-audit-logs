@@ -1,0 +1,65 @@
+{
+  "name": "Slack Audit Logs",
+  "description": "Collect audit events from the Slack Audit Logs API",
+  "uuid": "72523535-3ae5-55d1-8ce5-223fa38813cd",
+  "docker_parameters": "SlackAuditLogsConnector",
+  "arguments": {
+    "properties": {
+      "intake_server": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Intake Server"
+      },
+      "intake_key": {
+        "title": "Intake Key",
+        "type": "string"
+      },
+      "frequency": {
+        "default": 60,
+        "maximum": 3600,
+        "minimum": 10,
+        "title": "Frequency",
+        "type": "integer"
+      },
+      "limit": {
+        "default": 1000,
+        "maximum": 9999,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "ratelimit_per_minute": {
+        "default": 30,
+        "maximum": 50,
+        "minimum": 1,
+        "title": "Ratelimit Per Minute",
+        "type": "integer"
+      },
+      "timebuffer": {
+        "default": 60,
+        "maximum": 3600,
+        "minimum": 1,
+        "title": "Timebuffer",
+        "type": "integer"
+      },
+      "lookback_seconds": {
+        "default": 3600,
+        "minimum": 60,
+        "title": "Lookback Seconds",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "intake_key"
+    ],
+    "title": "SlackAuditLogsConnectorConfiguration",
+    "type": "object"
+  }
+}
