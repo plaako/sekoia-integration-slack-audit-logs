@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import orjson
@@ -152,7 +153,7 @@ def test_windows_are_walked_in_ascending_order_and_bounded_by_the_timebuffer(mod
     assert len(windows) == 3  # three hours of backlog, one sub-window per hour
     assert windows == sorted(windows)  # oldest first, so progress stays expressible as a timestamp
     assert windows[0][0] == start + 1
-    assert all(nxt[0] == cur[1] + 1 for cur, nxt in zip(windows, windows[1:]))  # no gap, no overlap
+    assert all(nxt[0] == cur[1] + 1 for cur, nxt in pairwise(windows))  # no gap, no overlap
     for oldest, latest in windows:
         assert oldest <= latest
         assert latest - oldest < connector.SUB_WINDOW_SECONDS
@@ -516,6 +517,31 @@ def test_the_stored_cursor_is_dropped_once_and_then_the_error_propagates(module,
     assert stored_progress(tmp_path)["cursor"] == ""  # the stale cursor is not offered again
 
 
+def test_a_failure_after_a_page_advanced_the_cursor_is_not_read_as_a_rejected_cursor(module, tmp_path, monkeypatch):
+    """A 5xx in the middle of a window is not the opening cursor's fault. Re-reading would spend the
+    window's requests again to re-deliver what this cycle just pushed."""
+    start = seconds_ago(2 * 3600)
+    connector = watermarked(module, tmp_path, start)
+    logged: list[tuple] = []
+    monkeypatch.setattr(connector, "log", lambda message, level="info", **kwargs: logged.append((level, message)))
+    seed_progress(tmp_path, window_start=start + 1, window_end=start + 3600, cursor="page-2")
+    attempts: list[str] = []
+
+    def fail_once_a_page_has_landed(self, oldest, latest, limit, cursor=""):
+        attempts.append(cursor)
+        yield [entry(f"a-{oldest}", oldest + 5)], "page-3"
+        raise SlackAuditLogsError("HTTP 502")
+
+    monkeypatch.setattr(type(connector.client), "iter_pages", fail_once_a_page_has_landed)
+
+    with pytest.raises(SlackAuditLogsError):
+        list(connector.iterate())
+
+    assert attempts == ["page-2"]  # the window is not re-read from its start
+    assert stored_progress(tmp_path)["cursor"] == "page-3"  # the cursor this cycle earned survives
+    assert not any("rejected the stored cursor" in message for _, message in logged)
+
+
 def test_a_credential_failure_is_not_retried_as_a_stale_cursor(module, tmp_path, monkeypatch):
     """A rejected token is not a rejected cursor: retrying would spend a request to fail the same
     way, and would log a misleading cursor warning on the way."""
@@ -638,7 +664,7 @@ def sdk_push(chunks: int):
         for index in range(chunks):
             try:
                 self._send_chunk("https://intake.test/batch", index, events, collect_ids)
-            except Exception:  # noqa: BLE001 - the real SDK runs these on an executor, and
+            except Exception:  # the real SDK runs these on an executor, and
                 pass  # `wait_futures` discards whatever a worker raises
 
         return [event_id for index in sorted(collect_ids) for event_id in collect_ids[index]]
@@ -732,10 +758,11 @@ def test_a_push_that_raises_leaves_the_ledger_and_the_checkpoint_untouched(modul
 # --- I3: the ledger is bounded and ordered ------------------------------------------------------
 
 
-def test_the_ledger_keeps_only_the_most_recent_ids_in_insertion_order(module, tmp_path, monkeypatch):
+def test_the_ledger_keeps_the_ids_a_re_read_would_meet_first(module, tmp_path, monkeypatch):
     start = seconds_ago(2 * 3600)
     connector = watermarked(module, tmp_path, start, limit=2)  # so the bound is 2 x 2 = 4 ids
-    pages = [[entry(f"e{index}", start + index)] for index in range(1, 8)]
+    # Slack pages newest first, page 1 carries most recent event of the window and its ids are appended first.
+    pages = [[entry(f"e{index}", start + 8 - index)] for index in range(1, 8)]
 
     def seven_pages_then_unfinished(self, oldest, latest, limit, cursor=""):
         for index, page in enumerate(pages, start=1):
@@ -746,7 +773,8 @@ def test_the_ledger_keeps_only_the_most_recent_ids_in_insertion_order(module, tm
     list(connector.iterate())
 
     stored = stored_progress(tmp_path)
-    assert stored["pushed_ids"] == ["e4", "e5", "e6", "e7"]  # newest four, oldest dropped first
+    # A re-read restarts at page 1, so the ledger has to hold those ids, not the tail it ends on.
+    assert stored["pushed_ids"] == ["e1", "e2", "e3", "e4"]
     assert stored["truncated"] is True
 
 

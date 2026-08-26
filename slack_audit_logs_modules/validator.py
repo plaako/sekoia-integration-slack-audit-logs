@@ -16,8 +16,7 @@ class SlackAuditLogsAccountValidator(AccountValidator):
         oldest = latest - PROBE_WINDOW_SECONDS
 
         try:
-            # Inside the try on purpose: a failure here would escape validate(), skip
-            # send_results(), and leave the console with no verdict at all.
+            # Inside the try: a failure here would escape validate() and skip send_results().
             client = AuditLogsClient(
                 base_url=self.module.configuration.base_url,
                 token=self.module.configuration.token,
@@ -38,7 +37,7 @@ class SlackAuditLogsAccountValidator(AccountValidator):
         except SlackAuditLogsError as error:
             self.error(f"The call to the Slack Audit Logs API failed ({error}). The token may still be valid.")
             return False
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             # Module.run() wraps execute() in try/finally only, with no except.
             self.error(f"Unexpected failure while validating the Slack credentials: {error}")
             return False

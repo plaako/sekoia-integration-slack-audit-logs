@@ -51,9 +51,9 @@ Two files under the connector's data path carry that state:
 
 ```bash
 uv sync
-uv run pytest                                    # 82 tests, coverage gate at 80 %
+uv run pytest                                    # 86 tests, coverage gate at 80 %
 uv run black . && uv run isort .
-uv run mypy --ignore-missing-imports .
+uv run mypy --install-types --non-interactive --ignore-missing-imports .
 uv run sekoia-automation generate-files-from-code
 ```
 

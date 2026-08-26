@@ -17,12 +17,10 @@ from slack_audit_logs_modules import SlackAuditLogsModule
 from slack_audit_logs_modules.client import AuditLogsClient
 from slack_audit_logs_modules.errors import AuthenticationError, PlanError, SlackAuditLogsError
 
-# The serialised events and the newest date among them.
 Batch = tuple[list[str], datetime | None]
 
 
 class SlackAuditLogsConnectorConfiguration(DefaultConnectorConfiguration):
-    # Bounded: `timebuffer` at 0 would commit `latest = now` and bury anything Slack indexes after.
     frequency: int = Field(
         default=60,
         ge=10,
@@ -49,8 +47,7 @@ class SlackAuditLogsConnectorConfiguration(DefaultConnectorConfiguration):
         ge=1,
         le=3600,
         description=(
-            "Seconds to wait before collecting a new event, so that events Slack publishes with a "
-            "delay are not missed"
+            "Seconds to wait before collecting a new event, so that events Slack publishes with a delay are not missed"
         ),
     )
     lookback_seconds: int = Field(
@@ -78,10 +75,8 @@ class WindowProgress:
     # Frozen at the window's opening so a resumed window is read to the same bound.
     window_end: int | None = None
     cursor: str = ""
-    # Already forwarded for this window, so a re-read does not push them again.
     pushed_ids: list[str] = field(default_factory=list)
     truncated: bool = False
-    # Never persisted: it describes this cycle only.
     drained: bool = False
 
 
@@ -94,8 +89,7 @@ class SlackAuditLogsConnector(Connector):
     module: SlackAuditLogsModule
     configuration: SlackAuditLogsConnectorConfiguration
 
-    # Slack returns entries newest first with no sort parameter, so the backlog is read as bounded
-    # windows walked forward: an interrupted cycle resumes its window instead of stepping over it.
+    # Slack pages newest first, so the backlog is read as bounded windows walked forward.
     SUB_WINDOW_SECONDS = 3600
     LEDGER_PAGES = 2
 
@@ -129,13 +123,11 @@ class SlackAuditLogsConnector(Connector):
 
     @cached_property
     def pending(self) -> PersistentJSON:
-        # Separate file: PersistentJSON rewrites the whole file, so a second instance on
-        # context.json would clobber CheckpointTimestamp's writes.
+        # Its own file: PersistentJSON rewrites the whole of it, and would clobber the checkpoint.
         return PersistentJSON("pending.json", self._data_path)
 
     def next_run(self) -> None:
-        # The SDK skips its own pause whenever a cycle forwarded an event, which would poll an active
-        # organization flat out - on a Slack quota shared with every other app in the customer's org.
+        # The SDK skips its pause after any cycle that forwarded, which would poll an active org flat out.
         started = time.time()
         super().next_run()
 
@@ -146,9 +138,7 @@ class SlackAuditLogsConnector(Connector):
     def _send_chunk(
         self, batch_api: str, chunk_index: int, chunk: list[Any], collect_ids: dict[int, list[str]]
     ) -> None:
-        # In a `finally` because super() does not always return: its failure handler calls self.log(),
-        # a synchronous POST that re-raises during the very outage that broke the intake POST, and the
-        # SDK's wait_futures swallows it. Counting on a normal return would miss the case entirely.
+        # In a `finally`: super()'s failure handler logs over HTTP, which re-raises in the same outage.
         try:
             super()._send_chunk(batch_api, chunk_index, chunk, collect_ids)
         finally:
@@ -187,7 +177,6 @@ class SlackAuditLogsConnector(Connector):
     def _resume(self, window_start: int) -> WindowProgress:
         """What is stored for the window starting at `window_start`, or a blank slate for a new one."""
         with self.pending as cache:
-            # Keyed on the window's start, which comes from the committed watermark.
             if cache.get("window_start") != window_start:
                 return WindowProgress()
 
@@ -199,6 +188,9 @@ class SlackAuditLogsConnector(Connector):
             )
 
     def _remember(self, window_start: int, window_end: int, cursor: str, progress: WindowProgress) -> None:
+        # Updated with the file: _drain compares against it to spot a rejected opening cursor.
+        progress.cursor = cursor
+
         with self.pending as cache:
             cache["window_start"] = window_start
             cache["window_end"] = window_end
@@ -220,24 +212,20 @@ class SlackAuditLogsConnector(Connector):
         bound = self.LEDGER_PAGES * self.configuration.limit
 
         if len(progress.pushed_ids) > bound:
-            progress.pushed_ids = progress.pushed_ids[-bound:]
+            # A re-read restarts at page 1, so keep the ids appended first.
+            progress.pushed_ids = progress.pushed_ids[:bound]
             progress.truncated = True
 
     def iterate(self) -> Generator[Batch, None, None]:
         try:
-            # Anything younger than the buffer is left for a later cycle, so an event Slack indexes
-            # late is still ahead of the boundary instead of behind the watermark.
             settled_until = int(datetime.now(UTC).timestamp()) - self.configuration.timebuffer
-            # Slack's `oldest` is inclusive: +1 means an event is never delivered twice. Reading the
-            # watermark writes context.json, so it belongs inside this try.
+            # Slack's `oldest` is inclusive: +1 means an event is never delivered twice.
             oldest = self.checkpoint.offset + 1
 
             while oldest <= settled_until:
                 progress = self._resume(oldest)
 
                 if progress.window_end is not None and progress.window_end > settled_until:
-                    # A backwards clock step can leave a frozen end ahead of the buffer; reading to
-                    # it would commit past the buffer and lose whatever Slack indexes in between.
                     self.log(
                         message=(
                             f"The window in flight ends at {progress.window_end}, after the settled "
@@ -248,7 +236,6 @@ class SlackAuditLogsConnector(Connector):
                     )
                     return
 
-                # An unfinished window keeps its opening end, so a stored cursor stays paired with it.
                 latest = (
                     progress.window_end
                     if progress.window_end is not None
@@ -258,17 +245,14 @@ class SlackAuditLogsConnector(Connector):
                 yield from self._drain(oldest, latest, progress)
 
                 if not progress.drained:
-                    # Page budget exhausted with a cursor pending. Not committing is what makes that
-                    # harmless: the next cycle carries on inside this window from the stored cursor.
+                    # Page budget spent. Not committing is what lets the next cycle carry on here.
                     return
 
-                # Commit the end actually read to - the frozen one when resuming.
                 self.checkpoint.offset = latest
                 self._forget()
 
                 oldest = latest + 1
         except (AuthenticationError, PlanError) as error:
-            # Neither retrying nor waiting fixes these: a human must act.
             self.log(
                 message=(
                     f"Slack refused the collection: {error}. Check that the token carries "
@@ -278,9 +262,6 @@ class SlackAuditLogsConnector(Connector):
                 level="critical",
             )
         except OSError as error:
-            # In the image `data_path` falls back to /symphony_data, which nothing creates. Every
-            # state access writes, so an unwritable path can fail at the watermark, at _resume, or at
-            # _remember after the push. Only a handler outside all of them catches every ordering.
             self.log(
                 message=(
                     f"Cannot read or record the collection state under {self._data_path} ({error}). "
@@ -293,19 +274,18 @@ class SlackAuditLogsConnector(Connector):
 
     def _drain(self, oldest: int, latest: int, progress: WindowProgress) -> Generator[Batch, None, None]:
         """Read one window, carrying on from any stored cursor."""
+        attempted = progress.cursor
+
         try:
-            yield from self._read(oldest, latest, progress.cursor, progress)
+            yield from self._read(oldest, latest, attempted, progress)
         except (AuthenticationError, PlanError):
-            # Not the cursor's fault; a retry would spend a request to fail the same way.
             raise
         except SlackAuditLogsError as error:
-            if not progress.cursor:
+            # Past the opening cursor the fault lies elsewhere, and a re-read would re-deliver.
+            if not attempted or progress.cursor != attempted:
                 raise
 
-            # Slack rejects a cursor it no longer recognises, so re-read the window from its start;
-            # the ledger holds back what an earlier cycle pushed. Clearing the stored cursor first
-            # means a second failure does not present it again. Without this path, a cursor Slack
-            # stops recognising stalls the window for good - and the watermark with it.
+            # Cleared before the re-read so a second failure does not offer it again.
             self.log(
                 message=f"Slack rejected the stored cursor ({error}); re-reading the window from its start.",
                 level="warning",
@@ -329,13 +309,11 @@ class SlackAuditLogsConnector(Connector):
         for entries, next_cursor in self.client.iter_pages(
             oldest=oldest, latest=latest, limit=self.configuration.limit, cursor=cursor
         ):
-            # Grown as entries are accepted, not snapshotted: a snapshot lets two entries sharing
-            # an id inside one page both through. Never observed from Slack - defensive only.
+            # Grown as entries are accepted: a snapshot would let a repeated id through twice.
             seen = set(progress.pushed_ids)
             fresh = []
             for event in entries:
                 identifier = self._identifier(event)
-                # An entry with no id is never held back - see _identifier.
                 if identifier is not None:
                     if identifier in seen:
                         continue
@@ -351,14 +329,12 @@ class SlackAuditLogsConnector(Connector):
 
                 yield serialised, self._newest_date(fresh)
 
-                # Reached only once the SDK pushed the batch above, so neither the cursor nor the
-                # ledger is ever recorded ahead of what was forwarded.
+                # Reached only once the SDK pushed, so nothing is recorded ahead of what was sent.
                 progress.pushed_ids.extend(
                     identifier for event in fresh if (identifier := self._identifier(event)) is not None
                 )
                 self._trim(progress)
 
-            # `latest` goes in too, so a resumed window is read to the same end it was opened with.
             self._remember(oldest, latest, next_cursor, progress)
 
             if not next_cursor:

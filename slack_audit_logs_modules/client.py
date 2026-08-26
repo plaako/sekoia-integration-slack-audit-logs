@@ -39,7 +39,12 @@ class AuditLogsClient(requests.Session):
 
         adapter = LimiterAdapter(
             per_minute=per_minute,
-            max_retries=Retry(total=nb_retries, backoff_factor=1),
+            max_retries=Retry(
+                total=nb_retries,
+                backoff_factor=1,
+                # Empty by default, which retries connection errors only.
+                status_forcelist=[429, 500, 502, 503, 504],
+            ),
         )
         self.mount("https://", adapter)
         self.mount("http://", adapter)
